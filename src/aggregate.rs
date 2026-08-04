@@ -82,17 +82,13 @@ impl P2 {
         }
     }
 
-    fn schedule(a: &[u8]) -> [i8; 256] {
-        let mut r = [0i8; 256];
-        for i in 0..256 {
-            r[i] = ((((a[i & 31] >> (i & 7)) & 1) as i8) * 2) - 1;
-        }
-        r
-    }
-
-    #[allow(clippy::comparison_chain)]
-    pub fn run(a_scalar: &[u8], a_point: P3) -> P2 {
-        let aslide = P2::schedule(a_scalar);
+    pub fn run(input: u8, a_point: P3) -> P2 {
+        let signs = [
+            (((input >> 0) & 1) as i8) * 2 - 1,
+            (((input >> 1) & 1) as i8) * 2 - 1,
+            (((input >> 2) & 1) as i8) * 2 - 1,
+            (((input >> 3) & 1) as i8) * 2 - 1,
+        ];
 
         let mut ai = [Cached {
             y_plus_x: ZERO,
@@ -106,14 +102,14 @@ impl P2 {
 
         let mut r = P2::zero();
 
-        let mut i: usize = 255;
+        let mut i: usize = 3;
 
         loop {
             let mut t = r.dbl();
-            if aslide[i] > 0 {
-                t = t.to_p3() + ai[(aslide[i] / 2) as usize];
-            } else if aslide[i] < 0 {
-                t = t.to_p3() - ai[(-aslide[i] / 2) as usize];
+            if signs[i] > 0 {
+                t = t.to_p3() + ai[(signs[i] / 2) as usize];
+            } else {
+                t = t.to_p3() - ai[(-signs[i] / 2) as usize];
             }
 
             r = t.to_p2();
@@ -127,14 +123,6 @@ impl P2 {
 }
 
 impl P3 {
-    #[inline(always)]
-    fn to_p2(&self) -> P2 {
-        P2 {
-            x: self.x,
-            y: self.y,
-            z: self.z,
-        }
-    }
     #[inline(always)]
     fn to_cached(&self) -> Cached {
         Cached {
@@ -155,7 +143,12 @@ impl P3 {
     }
     #[inline(always)]
     fn dbl(&self) -> P1P1 {
-        self.to_p2().dbl()
+        P2 {
+            x: self.x,
+            y: self.y,
+            z: self.z,
+        }
+        .dbl()
     }
 
 }
@@ -212,12 +205,6 @@ impl Sub<Cached> for P3 {
 }
 
 pub fn exercise(input: u8) -> u8 {
-    let mut a = [input; 32];
-    a[0] |= 1;
-    a[31] |= 64;
-
-    let doubled = P2::run(&a, P3::zero())
-        .dbl()
-        .to_p3();
-    doubled.x.0[0] as u8
+    let out = P2::run(input, P3::zero());
+    out.x.0[0] as u8
 }
