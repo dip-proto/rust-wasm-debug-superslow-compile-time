@@ -2,14 +2,14 @@ use core::ops::{Add, Mul, Sub};
 
 const MASK: u128 = 0x0007_ffff_ffff_ffff;
 
-#[derive(Clone, Default, Copy)]
+#[derive(Clone, Copy)]
 pub struct Limb(pub [u64; 5]);
 
-pub static ZERO: Limb = Limb([0, 0, 0, 0, 0]);
-pub static ONE: Limb = Limb([1, 0, 0, 0, 0]);
+pub const ZERO: Limb = Limb([0, 0, 0, 0, 0]);
+pub const ONE: Limb = Limb([1, 0, 0, 0, 0]);
 
 #[inline]
-pub fn wide_mul(out: &mut [u64; 5], a: &[u64; 5], b: &[u64; 5]) {
+fn wide_mul(out: &mut [u64; 5], a: &[u64; 5], b: &[u64; 5]) {
     let x1: u128 = (a[0] as u128).wrapping_mul(b[0] as u128);
     let x2: u128 = (a[0] as u128).wrapping_mul(b[1] as u128);
     let x3: u128 = (a[0] as u128).wrapping_mul(b[2] as u128);
@@ -85,7 +85,7 @@ impl Mul for Limb {
     type Output = Limb;
     #[inline(always)]
     fn mul(self, rhs: Limb) -> Limb {
-        let mut out = Limb::default();
+        let mut out = Limb([0; 5]);
         wide_mul(&mut out.0, &self.0, &rhs.0);
         out
     }
@@ -93,7 +93,7 @@ impl Mul for Limb {
 
 impl Limb {
     #[inline(always)]
-    pub fn carry(&self) -> Limb {
+    fn carry(&self) -> Limb {
         let x1 = self.0[0].wrapping_add(self.0[4] >> 51);
         let x2 = self.0[1].wrapping_add(x1 >> 51);
         let x3 = self.0[2].wrapping_add(x2 >> 51);
@@ -110,7 +110,7 @@ impl Limb {
 
     #[inline(always)]
     pub fn square(&self) -> Limb {
-        let mut out = Limb::default();
+        let mut out = Limb([0; 5]);
         wide_mul(&mut out.0, &self.0, &self.0);
         out
     }

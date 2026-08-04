@@ -1,30 +1,30 @@
 use super::limb::*;
 
 #[derive(Clone, Copy)]
-pub struct P2 {
+struct P2 {
     x: Limb,
     y: Limb,
     z: Limb,
 }
 
 #[derive(Clone, Copy)]
-pub struct P3 {
+struct P3 {
     x: Limb,
     y: Limb,
     z: Limb,
     t: Limb,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct P1P1 {
+#[derive(Clone, Copy)]
+struct P1P1 {
     x: Limb,
     y: Limb,
     z: Limb,
     t: Limb,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct Cached {
+#[derive(Clone, Copy)]
+struct Cached {
     y_plus_x: Limb,
     y_minus_x: Limb,
     z: Limb,
@@ -72,12 +72,10 @@ impl P2 {
         }
     }
 
-    pub fn run(input: u8, a_point: P3) -> P2 {
+    fn run(input: u8, a_point: P3) -> P2 {
         let signs = [
             (((input >> 0) & 1) as i8) * 2 - 1,
             (((input >> 1) & 1) as i8) * 2 - 1,
-            (((input >> 2) & 1) as i8) * 2 - 1,
-            (((input >> 3) & 1) as i8) * 2 - 1,
         ];
 
         let mut ai = [Cached {
@@ -102,7 +100,7 @@ impl P2 {
             z: ONE,
         };
 
-        for i in (0..4).rev() {
+        for i in (0..2).rev() {
             let mut t = r.dbl();
             if signs[i] > 0 {
                 t = t.to_p3().apply(ai[(signs[i] / 2) as usize], false);
@@ -155,9 +153,7 @@ impl P3 {
             t: t3,
         }
     }
-
 }
-
 
 pub fn exercise(input: u8) -> u8 {
     let out = P2::run(
