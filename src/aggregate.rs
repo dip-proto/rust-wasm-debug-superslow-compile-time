@@ -53,14 +53,6 @@ impl P1P1 {
 
 impl P2 {
     #[inline(always)]
-    fn zero() -> P2 {
-        P2 {
-            x: ZERO,
-            y: ONE,
-            z: ONE,
-        }
-    }
-    #[inline(always)]
     fn dbl(&self) -> P1P1 {
         let xx = self.x.square();
         let yy = self.y.square();
@@ -95,10 +87,20 @@ impl P2 {
             t2d: ZERO,
         }; 2];
         ai[0] = a_point.to_cached();
-        let a2 = a_point.dbl().to_p3();
+        let a2 = P2 {
+            x: a_point.x,
+            y: a_point.y,
+            z: a_point.z,
+        }
+        .dbl()
+        .to_p3();
         ai[1] = a2.apply(ai[0], false).to_p3().to_cached();
 
-        let mut r = P2::zero();
+        let mut r = P2 {
+            x: ZERO,
+            y: ONE,
+            z: ONE,
+        };
 
         for i in (0..4).rev() {
             let mut t = r.dbl();
@@ -123,24 +125,6 @@ impl P3 {
             z: self.z,
             t2d: self.t,
         }
-    }
-    #[inline(always)]
-    fn zero() -> P3 {
-        P3 {
-            x: ZERO,
-            y: ONE,
-            z: ONE,
-            t: ZERO,
-        }
-    }
-    #[inline(always)]
-    fn dbl(&self) -> P1P1 {
-        P2 {
-            x: self.x,
-            y: self.y,
-            z: self.z,
-        }
-        .dbl()
     }
     #[inline(always)]
     fn apply(self, rhs: Cached, neg: bool) -> P1P1 {
@@ -176,6 +160,14 @@ impl P3 {
 
 
 pub fn exercise(input: u8) -> u8 {
-    let out = P2::run(input, P3::zero());
+    let out = P2::run(
+        input,
+        P3 {
+            x: ZERO,
+            y: ONE,
+            z: ONE,
+            t: ZERO,
+        },
+    );
     out.x.0[0] as u8
 }
