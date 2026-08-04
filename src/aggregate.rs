@@ -1,5 +1,3 @@
-use core::ops::{Add, Sub};
-
 use super::limb::*;
 
 #[derive(Clone, Copy)]
@@ -98,16 +96,16 @@ impl P2 {
         }; 2];
         ai[0] = a_point.to_cached();
         let a2 = a_point.dbl().to_p3();
-        ai[1] = (a2 + ai[0]).to_p3().to_cached();
+        ai[1] = a2.apply(ai[0], false).to_p3().to_cached();
 
         let mut r = P2::zero();
 
         for i in (0..4).rev() {
             let mut t = r.dbl();
             if signs[i] > 0 {
-                t = t.to_p3() + ai[(signs[i] / 2) as usize];
+                t = t.to_p3().apply(ai[(signs[i] / 2) as usize], false);
             } else {
-                t = t.to_p3() - ai[(-signs[i] / 2) as usize];
+                t = t.to_p3().apply(ai[(-signs[i] / 2) as usize], true);
             }
 
             r = t.to_p2();
@@ -176,22 +174,6 @@ impl P3 {
 
 }
 
-
-impl Add<Cached> for P3 {
-    type Output = P1P1;
-    #[inline(always)]
-    fn add(self, _rhs: Cached) -> P1P1 {
-        self.apply(_rhs, false)
-    }
-}
-
-impl Sub<Cached> for P3 {
-    type Output = P1P1;
-    #[inline(always)]
-    fn sub(self, _rhs: Cached) -> P1P1 {
-        self.apply(_rhs, true)
-    }
-}
 
 pub fn exercise(input: u8) -> u8 {
     let out = P2::run(input, P3::zero());
