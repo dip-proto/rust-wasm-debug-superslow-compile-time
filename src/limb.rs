@@ -7,7 +7,6 @@ pub struct Limb(pub [u64; 5]);
 
 pub static ZERO: Limb = Limb([0, 0, 0, 0, 0]);
 pub static ONE: Limb = Limb([1, 0, 0, 0, 0]);
-pub(crate) static MIX: Limb = Limb([3, 5, 7, 11, 13]);
 
 #[inline]
 pub fn wide_mul(out: &mut [u64; 5], a: &[u64; 5], b: &[u64; 5]) {
