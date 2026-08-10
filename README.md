@@ -79,46 +79,6 @@ Executing Pass 'WebAssembly Register Stackify' on Function '_ZN29wasm_reg_stacki
 final310-pass-trace elapsed=0:12.01 maxrss=41356KB status=124
 ```
 
-## Reduced pattern
-
-The remaining trigger is:
-
-- `wasm32-wasip1`
-- optimized release codegen
-- full Rust debuginfo, `debug = 2`
-- a public `repro(u8)` that reaches one private aggregate routine
-- a two-iteration reverse loop
-- a two-entry fixed sign array derived from the input byte
-- a two-entry precomputed aggregate array
-- private inline aggregate-returning methods over `P2`, `P3`, `P1P1`, and
-  `Cached`
-- a synthetic five-limb `Limb([u64; 5])`
-- a full 5x5 `wide_mul` using 25 `u128` products
-- subtraction normalization through a five-limb carry chain
-- one cached `z` multiplication in the signed aggregate operation
-
-Minimization controls that make the build fast:
-
-- one loop iteration instead of two: about 0.29s
-- computing the sign inside the loop instead of using the fixed sign array:
-  about 0.70s
-- reducing `wide_mul` to 24 products: about 1.00s
-- reducing `wide_mul` to 20 products, even with three loop iterations: about
-  0.90s
-- removing the subtraction carry normalization: about 1.00s
-- removing the cached `z` multiplication from the aggregate operation: about
-  1.00s
-- replacing the signed add/sub branch with positive-only operation: fast
-- using one precomputed aggregate instead of two: fast
-- using four limbs instead of five: fast
-- marking aggregate or limb helpers `#[inline(never)]`: fast
-- `debug = 1`, no debuginfo, or a non-wasm host target: fast
-
-This suggests the issue is not the source algorithm. It is a target/backend
-compile-time cliff exposed by a compact combination of full debug values,
-inlining, wasm stackification, 25-product `u128` arithmetic, and aggregate
-value movement.
-
 ## Likely LLVM hot spot
 
 The likely LLVM hot spot is the interaction between:
