@@ -1,25 +1,15 @@
 # wasm reg-stackify debug-info compile-time repro
 
-This is a minimized Rust repro for a very slow `wasm32-wasip1` optimized build
-with full debuginfo. It is intentionally generic: there is no dependency on
-`ed25519-compact`, no crypto crate, and no curve-specific names or constants.
+The Rust compiler can be extremely slow to generate debugging information for the WebAssembly target.
 
-The manifest plus Rust source is 310 lines:
-
-```text
-  12 Cargo.toml
-   6 src/lib.rs
- 169 src/aggregate.rs
- 123 src/limb.rs
- 310 total
-```
+This repository is a ~300 lines reproducer.
 
 ## Reproduce
 
 ```sh
 rustup target add wasm32-wasip1
 cargo clean
-timeout 30s cargo build --release --target=wasm32-wasip1
+cargo build --release --target=wasm32-wasip1
 ```
 
 The manifest sets:
@@ -41,13 +31,9 @@ LLVM version: 21.1.8
 cargo 1.94.1 (29ea6fb6a 2026-03-24)
 ```
 
-On my machine, the full-debuginfo wasm release build does not finish within 30
-seconds:
+On my machine, the full-debuginfo wasm release build does not finish within 30 seconds.
 
-```text
-timeout 30s cargo build --release --target=wasm32-wasip1
-# final310-debug2-wasm elapsed=0:30.02 maxrss=41408KB status=124
-```
+Workaround is to use `debug = 1`, but the root cause should be fixed.
 
 Controls:
 
@@ -86,8 +72,7 @@ The likely LLVM hot spot is the interaction between:
 - `llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp`
 - `llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp`
 
-The pass trace points to `WebAssembly Register Stackify`, before
-`WebAssembly Debug Fixup` runs:
+The pass trace points to `WebAssembly Register Stackify`, before `WebAssembly Debug Fixup` runs:
 
 ```text
 ... WebAssembly Memory Intrinsic Results
@@ -96,26 +81,15 @@ Executing Pass 'WebAssembly Register Stackify' on Function '...aggregate...P2...
 
 Relevant LLVM code paths from inspection:
 
-- `WebAssemblyRegStackify::runOnMachineFunction` walks each machine basic block
-  bottom-up and recursively stackifies operands by pushing operands from newly
-  stackified instructions back onto its worklist.
-- The stackifier calls helpers such as `moveForSingleUse`,
-  `rematerializeCheapDef`, and `moveAndTeeForMultiUse`.
-- Those helpers instantiate `WebAssemblyDebugValueManager` and call `sink`,
-  `cloneSink`, `updateReg`, and `removeDef` while moving or cloning machine
-  instructions.
-- `WebAssemblyDebugValueManager::WebAssemblyDebugValueManager(MachineInstr *Def)`
-  scans forward from `Def` through the machine basic block until the next def of
-  the same register, collecting matching `DBG_VALUE`s.
-- `WebAssemblyDebugValueManager::getSinkableDebugValues(MachineInstr *Insert)`
-  scans the region between `Def` and `Insert` again to collect intervening
-  `DBG_VALUE`s and reject debug-variable reorderings.
-- `sink` and `cloneSink` call `getSinkableDebugValues`, splice or clone the
-  definition, clone sinkable debug values, and undef original debug values.
+- `WebAssemblyRegStackify::runOnMachineFunction` walks each machine basic block bottom-up and recursively stackifies operands by pushing operands from newly stackified instructions back onto its worklist.
+- The stackifier calls helpers such as `moveForSingleUse`, `rematerializeCheapDef`, and `moveAndTeeForMultiUse`.
+- Those helpers instantiate `WebAssemblyDebugValueManager` and call `sink`, `cloneSink`, `updateReg`, and `removeDef` while moving or cloning machine instructions.
+- `WebAssemblyDebugValueManager::WebAssemblyDebugValueManager(MachineInstr *Def)` scans forward from `Def` through the machine basic block until the next def of the same register, collecting matching `DBG_VALUE`s.
+- `WebAssemblyDebugValueManager::getSinkableDebugValues(MachineInstr *Insert)` scans the region between `Def` and `Insert` again to collect intervening `DBG_VALUE`s and reject debug-variable reorderings.
+- `sink` and `cloneSink` call `getSinkableDebugValues`, splice or clone the definition, clone sinkable debug values, and undef original debug values.
 
-The suspected bug is pathological compile time, not incorrect output. For a
-large inlined machine block with Rust `debug = 2`, the wasm stackifier appears
-to repeat forward debug-value scans for many virtual-register definitions while
-building stackified expression trees. The minimized repro keeps just enough
-inlined aggregate movement and `u128` arithmetic to produce that
-debug-info-dependent multiplier.
+The suspected bug is pathological compile time, not incorrect output.
+
+For large inlined machine block with Rust `debug = 2`, the wasm stackifier appears to repeat forward debug-value scans for many virtual-register definitions while building stackified expression trees.
+
+The minimized repro keeps just enough inlined aggregate movement and `u128` arithmetic to produce that debug-info-dependent multiplier.
