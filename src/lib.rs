@@ -1,5 +1,3 @@
-const MASK: u64 = 0x0007_ffff_ffff_ffff;
-
 type F = [u64; 5];
 
 #[inline(always)]
@@ -10,7 +8,7 @@ fn mul(a: F, b: F) -> F {
             t[i + j] = t[i + j].wrapping_add((a[i] as u128).wrapping_mul(b[j] as u128));
         }
     }
-    core::array::from_fn(|i| t[i].wrapping_add(t[i + 4] >> 51) as u64 & MASK)
+    core::array::from_fn(|i| t[i].wrapping_add(t[i + 4] >> 51) as u64)
 }
 
 #[inline(always)]

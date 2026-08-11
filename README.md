@@ -6,7 +6,7 @@ Nearly all of the time goes into a single LLVM pass, `WebAssembly Register Stack
 
 The machine code itself is not the problem: the very same function compiles in a couple of seconds once the `DBG_VALUE` records are gone.
 
-This repository is a ~50 lines reproducer.
+This repository is a ~40 lines reproducer.
 
 ## Reproduce
 
@@ -43,9 +43,9 @@ The full-debuginfo wasm release build does not finish within 30 seconds on my ma
 | Build                                  | Time         |
 +----------------------------------------+--------------+
 | wasm32-unknown-unknown, debug = 2      | 30 s to 50 s |
-| wasm32-unknown-unknown, debug = 1      | 4.6 s        |
-| wasm32-unknown-unknown, no debug info  | 1.8 s        |
-| host target, debug = 2                 | 1.5 s        |
+| wasm32-unknown-unknown, debug = 1      | 2.9 s        |
+| wasm32-unknown-unknown, no debug info  | 1.3 s        |
+| host target, debug = 2                 | 1.1 s        |
 +----------------------------------------+--------------+
 
 ```sh
@@ -72,17 +72,38 @@ The crate generates a single function, `repro`, and summing per pass gives this.
 +---------------------------------+-----------+-----------+
 | Pass                            | debug = 2 | debug = 1 |
 +---------------------------------+-----------+-----------+
-| WebAssembly Register Stackify   |  30.01 s  |   2.06 s  |
-| WebAssembly Explicit Locals     |   4.26 s  |   0.23 s  |
-| WebAssembly Instruction Sel.    |   0.18 s  |   0.18 s  |
-| everything else                 |   0.39 s  |   0.04 s  |
+| WebAssembly Register Stackify   |  26.19 s  |   2.30 s  |
+| WebAssembly Explicit Locals     |   3.58 s  |   0.25 s  |
+| WebAssembly Instruction Sel.    |   0.17 s  |   0.19 s  |
+| everything else                 |   0.37 s  |   0.04 s  |
 +---------------------------------+-----------+-----------+
-| total                           |  34.85 s  |   2.50 s  |
+| total                           |  30.31 s  |   2.78 s  |
 +---------------------------------+-----------+-----------+
 
 Instruction selection costs exactly the same in both columns, which is the expected result since the input machine code is the same.
 
-Stackify is roughly fifteen times slower, and it is holding 86% of the whole codegen time.
+Stackify is roughly eleven times slower, and it is holding 86% of the whole codegen time.
+
+## It scales with the number of debug records, not with the amount of code
+
+The reproducer multiplies through `wrapping_add` and `wrapping_mul` rather than through `+` and `*`.
+
+That is not a detail. Overflow checks are already off in a release profile, so the two spellings are the same operation, and they do produce exactly the same code: built with `debug = false`, the emitted LLVM IR is identical, 3809 lines either way.
+
+Only the debug information differs, because each `wrapping_*` is a separate inlined function whose parameters get records of their own.
+
++-------------------------------+------------+---------+
+| Written as                    | #dbg_value | Build   |
++-------------------------------+------------+---------+
+| `wrapping_add`/`wrapping_mul` |     30 612 |    55 s |
+| `+` and `*`                   |     13 101 |     9 s |
++-------------------------------+------------+---------+
+
+Same machine code, 2.3 times the debug records, and roughly six times the build time.
+
+This looks like the most direct evidence that the cost is in handling the debug values, and not in the stackification itself.
+
+It also means the reproducer is easy to break by accident: replacing the `wrapping_*` calls with plain operators looks like a harmless cleanup and makes most of the problem disappear.
 
 ## Likely LLVM hot spot
 
