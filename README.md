@@ -88,7 +88,7 @@ Stackify is roughly eleven times slower, and it is holding 86% of the whole code
 
 The reproducer multiplies through `wrapping_add` and `wrapping_mul` rather than through `+` and `*`.
 
-That is not a detail. Overflow checks are already off in a release profile, so the two spellings are the same operation, and they do produce exactly the same code: built with `debug = false`, the emitted LLVM IR is identical, 3809 lines either way.
+Overflow checks are already off in a release profile, so the two spellings are the same operation, and they do produce exactly the same code: built with `debug = false`, the emitted LLVM IR is identical, 3809 lines either way.
 
 Only the debug information differs, because each `wrapping_*` is a separate inlined function whose parameters get records of their own.
 
@@ -102,8 +102,6 @@ Only the debug information differs, because each `wrapping_*` is a separate inli
 Same machine code, 2.3 times the debug records, and roughly six times the build time.
 
 This looks like the most direct evidence that the cost is in handling the debug values, and not in the stackification itself.
-
-It also means the reproducer is easy to break by accident: replacing the `wrapping_*` calls with plain operators looks like a harmless cleanup and makes most of the problem disappear.
 
 ## Likely LLVM hot spot
 
