@@ -7,9 +7,9 @@ This repository is a ~300 lines reproducer.
 ## Reproduce
 
 ```sh
-rustup target add wasm32-wasip1
+rustup target add wasm32-unknown-unknown
 cargo clean
-cargo build --release --target=wasm32-wasip1
+cargo build --release --target=wasm32-unknown-unknown
 ```
 
 The manifest sets:
@@ -38,16 +38,16 @@ Workaround is to use `debug = 1`, but the root cause should be fixed.
 Controls:
 
 ```text
-CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --target=wasm32-wasip1
+CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --target=wasm32-unknown-unknown
 # final310-debug1-wasm elapsed=0:00.88 maxrss=118576KB
 
-CARGO_PROFILE_RELEASE_DEBUG=false cargo build --release --target=wasm32-wasip1
+CARGO_PROFILE_RELEASE_DEBUG=false cargo build --release --target=wasm32-unknown-unknown
 # final310-nodebug-wasm elapsed=0:00.51 maxrss=112332KB
 
 cargo build --release
 # final310-debug2-host elapsed=0:00.75 maxrss=135712KB
 
-cargo rustc --release --target=wasm32-wasip1 -- --emit=llvm-ir -C no-prepopulate-passes
+cargo rustc --release --target=wasm32-unknown-unknown -- --emit=llvm-ir -C no-prepopulate-passes
 # final310-no-prepopulate-ir elapsed=0:00.12 maxrss=101280KB
 ```
 
@@ -55,7 +55,7 @@ With:
 
 ```sh
 RUSTFLAGS='-Cllvm-args=--debug-pass=Executions' \
-  timeout 12s cargo build --release --target=wasm32-wasip1
+  timeout 12s cargo build --release --target=wasm32-unknown-unknown
 ```
 
 the compile is killed after entering:
