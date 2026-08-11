@@ -6,7 +6,7 @@ Nearly all of the time goes into a single LLVM pass, `WebAssembly Register Stack
 
 The machine code itself is not the problem: the very same function compiles in a couple of seconds once the `DBG_VALUE` records are gone.
 
-This repository is a ~50 lines reproducer in a single file.
+This repository is a ~50 lines reproducer.
 
 ## Reproduce
 
