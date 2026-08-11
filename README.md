@@ -91,5 +91,3 @@ Relevant LLVM code paths from inspection:
 The suspected bug is pathological compile time, not incorrect output.
 
 For large inlined machine block with Rust `debug = 2`, the wasm stackifier appears to repeat forward debug-value scans for many virtual-register definitions while building stackified expression trees.
-
-The minimized repro keeps just enough inlined aggregate movement and `u128` arithmetic to produce that debug-info-dependent multiplier.
