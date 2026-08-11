@@ -2,7 +2,11 @@
 
 The Rust compiler can be extremely slow to generate debugging information for the WebAssembly target.
 
-This repository is a ~300 lines reproducer.
+Nearly all of the time goes into a single LLVM pass, `WebAssembly Register Stackify`, and the slowdown only appears when full debug info is requested.
+
+The machine code itself is not the problem: the very same function compiles in a couple of seconds once the `DBG_VALUE` records are gone.
+
+This repository is a ~50 lines reproducer in a single file.
 
 ## Reproduce
 
@@ -25,71 +29,79 @@ debug = 2
 Observed with:
 
 ```text
-rustc 1.94.1 (e408947bf 2026-03-25)
-host: x86_64-unknown-linux-gnu
-LLVM version: 21.1.8
-cargo 1.94.1 (29ea6fb6a 2026-03-24)
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+host: aarch64-apple-darwin
+LLVM version: 22.1.6
+cargo 1.97.1 (c980f4866 2026-06-30)
 ```
 
-On my machine, the full-debuginfo wasm release build does not finish within 30 seconds.
+The full-debuginfo wasm release build does not finish within 30 seconds on my machine, and it is quite sensitive to thermal throttling, so repeated runs range from about 30 to 50 seconds.
 
-Workaround is to use `debug = 1`, but the root cause should be fixed.
+## Controls
 
-Controls:
++----------------------------------------+--------------+
+| Build                                  | Time         |
++----------------------------------------+--------------+
+| wasm32-unknown-unknown, debug = 2      | 30 s to 50 s |
+| wasm32-unknown-unknown, debug = 1      | 4.6 s        |
+| wasm32-unknown-unknown, no debug info  | 1.8 s        |
+| host target, debug = 2                 | 1.5 s        |
++----------------------------------------+--------------+
 
-```text
+```sh
 CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --target=wasm32-unknown-unknown
-# final310-debug1-wasm elapsed=0:00.88 maxrss=118576KB
-
 CARGO_PROFILE_RELEASE_DEBUG=false cargo build --release --target=wasm32-unknown-unknown
-# final310-nodebug-wasm elapsed=0:00.51 maxrss=112332KB
-
 cargo build --release
-# final310-debug2-host elapsed=0:00.75 maxrss=135712KB
-
-cargo rustc --release --target=wasm32-unknown-unknown -- --emit=llvm-ir -C no-prepopulate-passes
-# final310-no-prepopulate-ir elapsed=0:00.12 maxrss=101280KB
 ```
 
-With:
+So this is neither "debug info is expensive" nor "this code is large". It takes both the WebAssembly backend and full debug info to trigger it.
+
+`debug = 1` is a usable workaround, but the root cause should be fixed.
+
+## Where the time goes
 
 ```sh
 RUSTFLAGS='-Cllvm-args=--debug-pass=Executions' \
-  timeout 12s cargo build --release --target=wasm32-unknown-unknown
+  cargo build --release --target=wasm32-unknown-unknown
 ```
 
-the compile is killed after entering:
+Every traced pass is timestamped, so the stall is easy to attribute: measure the delay between each pass entry and the next one.
 
-```text
-Executing Pass 'WebAssembly Register Stackify' on Function '_ZN29wasm_reg_stackify_debug_repro9aggregate2P23run17hf53ef9ee49cd11bcE'...
-final310-pass-trace elapsed=0:12.01 maxrss=41356KB status=124
-```
+The crate generates a single function, `repro`, and summing per pass gives this.
+
++---------------------------------+-----------+-----------+
+| Pass                            | debug = 2 | debug = 1 |
++---------------------------------+-----------+-----------+
+| WebAssembly Register Stackify   |  30.01 s  |   2.06 s  |
+| WebAssembly Explicit Locals     |   4.26 s  |   0.23 s  |
+| WebAssembly Instruction Sel.    |   0.18 s  |   0.18 s  |
+| everything else                 |   0.39 s  |   0.04 s  |
++---------------------------------+-----------+-----------+
+| total                           |  34.85 s  |   2.50 s  |
++---------------------------------+-----------+-----------+
+
+Instruction selection costs exactly the same in both columns, which is the expected result since the input machine code is the same.
+
+Stackify is roughly fifteen times slower, and it is holding 86% of the whole codegen time.
 
 ## Likely LLVM hot spot
 
-The likely LLVM hot spot is the interaction between:
+The likely hot spot is the interaction between:
 
 - `llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp`
 - `llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp`
 
-The pass trace points to `WebAssembly Register Stackify`, before `WebAssembly Debug Fixup` runs:
+Relevant code paths, from inspection:
 
-```text
-... WebAssembly Memory Intrinsic Results
-Executing Pass 'WebAssembly Register Stackify' on Function '...aggregate...P2...run...'
-```
-
-Relevant LLVM code paths from inspection:
-
-- `WebAssemblyRegStackify::runOnMachineFunction` walks each machine basic block bottom-up and recursively stackifies operands by pushing operands from newly stackified instructions back onto its worklist.
-- The stackifier calls helpers such as `moveForSingleUse`, `rematerializeCheapDef`, and `moveAndTeeForMultiUse`.
-- Those helpers instantiate `WebAssemblyDebugValueManager` and call `sink`, `cloneSink`, `updateReg`, and `removeDef` while moving or cloning machine instructions.
+- `WebAssemblyRegStackify::runOnMachineFunction` walks each machine basic block   bottom-up and recursively stackifies operands, pushing the operands of newly stackified instructions back onto its worklist.
+- The stackifier calls helpers such as `moveForSingleUse`, `rematerializeCheapDef` and `moveAndTeeForMultiUse`.
+- Those helpers instantiate a `WebAssemblyDebugValueManager` and call `sink`, `cloneSink`, `updateReg` and `removeDef` while moving or cloning machine instructions.
 - `WebAssemblyDebugValueManager::WebAssemblyDebugValueManager(MachineInstr *Def)` scans forward from `Def` through the machine basic block until the next def of the same register, collecting matching `DBG_VALUE`s.
-- `WebAssemblyDebugValueManager::getSinkableDebugValues(MachineInstr *Insert)` scans the region between `Def` and `Insert` again to collect intervening `DBG_VALUE`s and reject debug-variable reorderings.
-- `sink` and `cloneSink` call `getSinkableDebugValues`, splice or clone the definition, clone sinkable debug values, and undef original debug values.
+- `WebAssemblyDebugValueManager::getSinkableDebugValues(MachineInstr *Insert)` scans the region between `Def` and `Insert` again, to collect intervening `DBG_VALUE`s and reject debug variable reorderings.
+- `sink` and `cloneSink` call `getSinkableDebugValues`, splice or clone the definition, clone the sinkable debug values, and undef the original ones.
 
-The suspected bug is pathological compile time, not incorrect output.
+For a large inlined machine block built with `debug = 2`, the stackifier appears to repeat these forward debug value scans for many virtual register definitions while it builds stackified expression trees.
 
-For large inlined machine block with Rust `debug = 2`, the wasm stackifier appears to repeat forward debug-value scans for many virtual-register definitions while building stackified expression trees.
+The cost is therefore superlinear in the size of the block, which matches what the reproducer does: adding one more level to the ladder in `src/lib.rs` roughly doubles the amount of code and multiplies the build time by an order of magnitude.
 
 I've no idea how to fix that, so if you can help, please do.
