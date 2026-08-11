@@ -1,4 +1,4 @@
-# wasm reg-stackify debug-info compile-time repro
+# repro: generating wasm debugging symbols is very slow (Rust)
 
 The Rust compiler can be extremely slow to generate debugging information for the WebAssembly target.
 
