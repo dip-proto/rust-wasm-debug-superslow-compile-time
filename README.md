@@ -6,10 +6,7 @@ for the WebAssembly target.
 Nearly all of the time goes into LLVM's `WebAssembly Register Stackify` pass.
 The slowdown appears only when full debug information is requested.
 
-The generated code is not the problem. The same function compiles in a couple
-of seconds once the `DBG_VALUE` records are gone.
-
-This repository is a reproducer with about 40 lines.
+See [Why compiling Rust to WebAssembly is slow](https://00f.net/2026/08/19/why-compiling-rust-to-webassembly-is-slow/) for more information.
 
 ## Reproduce
 
@@ -19,7 +16,7 @@ cargo clean
 cargo build --release --target=wasm32-unknown-unknown
 ```
 
-The manifest sets:
+In `cargo.toml`:
 
 ```toml
 [profile.release]
@@ -29,20 +26,9 @@ panic = "abort"
 debug = 2
 ```
 
-Observed with:
-
-```text
-rustc 1.97.1 (8bab26f4f 2026-07-14)
-host: aarch64-apple-darwin
-LLVM version: 22.1.6
-cargo 1.97.1 (c980f4866 2026-06-30)
-```
-
-The full-debuginfo wasm release build does not finish within 30 seconds on my
-machine. It is sensitive to thermal throttling. Repeated runs take about 30 to
-50 seconds.
-
 ## Controls
+
+On my machine:
 
 ```text
 +----------------------------------------+--------------+
@@ -123,62 +109,10 @@ inlined function. Its parameters receive their own records.
 The machine code is the same. There are 2.3 times as many debug records and
 roughly six times the build time.
 
-This is direct evidence that the cost is in handling debug values. The cost is
-not in stackification itself.
+### Fix
 
-## Confirmed root cause
+[The patch](llvm-wasm-debug-fix.patch) is for the LLVM fork included in the current Rust version.
 
-The issue comes from the interaction between:
-
-- `llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp`
-- `llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp`
-
-`WebAssemblyRegStackify` processes stackifiable definitions. It creates a
-`WebAssemblyDebugValueManager` for many definitions. The manager's constructor,
-`getSinkableDebugValues`, and `isInsertSamePlace` repeatedly walk the raw
-`MachineBasicBlock` instruction list. They use the list to find or compare
-`DBG_VALUE` records.
-
-The problem grows during stackification:
-
-- `sink()` leaves old `DBG_VALUE` instructions as undef tombstones.
-- `cloneSink()` adds new `DBG_VALUE` instructions without removing old ones.
-- A basic block's debug-instruction population grows during the pass. Each list
-  walk crosses an increasing set of live records and tombstones.
-
-This produces O(n^2)-like behavior in the number of `DBG_VALUE` records. It
-explains why `WebAssembly Register Stackify` consumes about 86% of codegen
-time.
-
-It also explains why inlined `wrapping_*` calls slow the build. They increase
-debug records without changing the generated code.
-
-## Fix
-
-[`llvm-wasm-debug-fix.patch`](llvm-wasm-debug-fix.patch) is a tested patch for
-the LLVM source vendored by the affected Rust compiler. It preserves debug-value
-ordering semantics while avoiding repeated expensive work:
-
-- It bounds the `WebAssemblyDebugValueManager` constructor scan with the
-  register's debug uses. It accounts for stale uses above the definition.
-- It uses a bidirectional same-block walk to determine whether an insertion is
-  a sink. It filters intervening records to relevant variables. It avoids
-  unnecessary `DebugVariable` construction and hashing.
-- It uses `SlotIndexes` for same-basic-block dominance checks. It skips
-  unnumbered debug instructions without a `SlotIndexes` map lookup.
-
-On the original benchmark, a Rust compiler rebuilt with this patch reduced the
-`debug = 2` build from 50.56 seconds to 2.72 seconds. This is 18.6 times
-faster.
-
-At the LLVM level, `WebAssembly Register Stackify` fell from 45.9 seconds to
-1.20 seconds. `WebAssembly Explicit Locals` fell from 6.5 seconds to 0.013
-seconds.
-
-### Apply the patch to a Rust source checkout
-
-The patch changes LLVM source.
-
-Apply it to the `src/llvm-project` submodule of a compatible `rust-lang/rust` checkout.
+Apply it to the `src/llvm-project` submodule of a `rust-lang/rust` checkout.
 
 Then rebuild Rust.
