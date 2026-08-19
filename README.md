@@ -169,13 +169,6 @@ At the LLVM level, `WebAssembly Register Stackify` fell from 45.9 seconds to
 1.20 seconds. `WebAssembly Explicit Locals` fell from 6.5 seconds to 0.013
 seconds.
 
-The remaining debug-info cost comes from ordinary processing and emission of
-many debug records. It does not come from this quadratic behavior.
-
-The patched LLVM produced byte-identical WebAssembly assembly at `-O0`, `-O2`,
-and `-O3` for this repro. It passed all 329 WebAssembly CodeGen/DebugInfo LLVM
-tests in an assertions-enabled build.
-
 ### Apply the patch to a Rust source checkout
 
 The patch changes LLVM source. It cannot modify an installed rustup toolchain.
@@ -193,9 +186,3 @@ cd ../..
 
 Run `git apply` from `src/llvm-project`. The patch paths start at that
 submodule's root.
-
-The patch was developed against Rust's LLVM 22-era vendored tree. It may need
-rebasing for newer LLVM revisions.
-
-A dirty `src/llvm-project` checkout causes Rust's bootstrap to build and use
-the local LLVM. It does not use an unchanged downloaded CI LLVM.
