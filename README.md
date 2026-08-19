@@ -2,9 +2,9 @@
 
 The Rust compiler can be extremely slow to generate debugging information for the WebAssembly target.
 
-Nearly all of the time goes into a single LLVM pass, `WebAssembly Register Stackify`, and the slowdown only appears when full debug info is requested.
+Nearly all of the time goes into LLVM's `WebAssembly Register Stackify` pass, and the slowdown only appears when full debug info is requested.
 
-The machine code itself is not the problem: the very same function compiles in a couple of seconds once the `DBG_VALUE` records are gone.
+The generated code is not the problem: the same function compiles in a couple of seconds once the `DBG_VALUE` records are gone.
 
 This repository is a ~40 lines reproducer.
 
@@ -54,9 +54,9 @@ CARGO_PROFILE_RELEASE_DEBUG=false cargo build --release --target=wasm32-unknown-
 cargo build --release
 ```
 
-So this is neither "debug info is expensive" nor "this code is large". It takes both the WebAssembly backend and full debug info to trigger it.
+This is not merely the normal cost of debug information or a large function. It requires both the WebAssembly backend and full debug information to trigger an LLVM performance bug.
 
-`debug = 1` is a usable workaround, but the root cause should be fixed.
+Until a compiler containing the fix is available, `debug = 1` is a usable workaround. The LLVM patch included in this repository fixes the pathological part of the cost.
 
 ## Where the time goes
 
@@ -103,24 +103,75 @@ Same machine code, 2.3 times the debug records, and roughly six times the build 
 
 This looks like the most direct evidence that the cost is in handling the debug values, and not in the stackification itself.
 
-## Likely LLVM hot spot
+## Confirmed root cause
 
-The likely hot spot is the interaction between:
+The issue is in the interaction between:
 
 - `llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp`
 - `llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp`
 
-Relevant code paths, from inspection:
+`WebAssemblyRegStackify` processes stackifiable definitions and creates a
+`WebAssemblyDebugValueManager` for many of them. The manager's constructor,
+`getSinkableDebugValues`, and `isInsertSamePlace` repeatedly walk the raw
+`MachineBasicBlock` instruction list to find or compare `DBG_VALUE`s.
 
-- `WebAssemblyRegStackify::runOnMachineFunction` walks each machine basic block   bottom-up and recursively stackifies operands, pushing the operands of newly stackified instructions back onto its worklist.
-- The stackifier calls helpers such as `moveForSingleUse`, `rematerializeCheapDef` and `moveAndTeeForMultiUse`.
-- Those helpers instantiate a `WebAssemblyDebugValueManager` and call `sink`, `cloneSink`, `updateReg` and `removeDef` while moving or cloning machine instructions.
-- `WebAssemblyDebugValueManager::WebAssemblyDebugValueManager(MachineInstr *Def)` scans forward from `Def` through the machine basic block until the next def of the same register, collecting matching `DBG_VALUE`s.
-- `WebAssemblyDebugValueManager::getSinkableDebugValues(MachineInstr *Insert)` scans the region between `Def` and `Insert` again, to collect intervening `DBG_VALUE`s and reject debug variable reorderings.
-- `sink` and `cloneSink` call `getSinkableDebugValues`, splice or clone the definition, clone the sinkable debug values, and undef the original ones.
+The problem is amplified during stackification:
 
-For a large inlined machine block built with `debug = 2`, the stackifier appears to repeat these forward debug value scans for many virtual register definitions while it builds stackified expression trees.
+- `sink()` leaves the old `DBG_VALUE` instructions in place as undef
+  tombstones.
+- `cloneSink()` adds new `DBG_VALUE`s without removing old ones.
+- Consequently, a basic block's debug-instruction population grows while the
+  pass is running, and each repeated list walk crosses an ever larger set of
+  live records and tombstones.
 
-The cost is therefore superlinear in the size of the block, which matches what the reproducer does: adding one more level to the ladder in `src/lib.rs` roughly doubles the amount of code and multiplies the build time by an order of magnitude.
+This produces O(n²)-like behavior in the number of `DBG_VALUE`s. It explains
+both why `WebAssembly Register Stackify` consumes about 86% of code-generation
+time and why changing the spelling from `+`/`*` to inlined `wrapping_*` calls
+(which increases debug records without changing the generated code) makes the
+build dramatically slower.
 
-I've no idea how to fix that, so if you can help, please do.
+## Fix
+
+[`llvm-wasm-debug-fix.patch`](llvm-wasm-debug-fix.patch) is a tested patch for
+the LLVM source vendored by the affected Rust compiler. It keeps the debug-value
+ordering semantics but avoids the expensive repeated work:
+
+- bounds the `WebAssemblyDebugValueManager` constructor scan using the
+  register's debug uses, while accounting for stale uses above the definition;
+- uses a bidirectional same-block walk when deciding whether an insertion is a
+  sink, filters intervening records to the relevant variables, and avoids their
+  unnecessary `DebugVariable` construction and hashing;
+- makes same-basic-block dominance checks use `SlotIndexes`, and skips
+  unnumbered debug instructions in `SlotIndexes` without a map lookup.
+
+On the original benchmark, using a Rust compiler rebuilt with this patch changed
+the `debug = 2` build from 50.56 s to 2.72 s (18.6x faster). At the LLVM level,
+`WebAssembly Register Stackify` fell from 45.9 s to 1.20 s and
+`WebAssembly Explicit Locals` from 6.5 s to 0.013 s. The remaining debug-info
+cost is ordinary processing and emission of the large number of debug records,
+not this quadratic behavior.
+
+The patched LLVM produced byte-identical WebAssembly assembly on this repro at
+`-O0`, `-O2`, and `-O3`, and passed all 329 WebAssembly CodeGen/DebugInfo LLVM
+tests in an assertions-enabled build.
+
+### Apply the patch to a Rust source checkout
+
+The patch changes LLVM source, so it cannot modify an already-installed rustup
+toolchain. Apply it to the `src/llvm-project` submodule of a compatible
+`rust-lang/rust` checkout and rebuild Rust (for example, a stage-2 compiler):
+
+```sh
+git clone https://github.com/rust-lang/rust.git
+cd rust/src/llvm-project
+git apply --check /absolute/path/to/llvm-wasm-debug-fix.patch
+git apply /absolute/path/to/llvm-wasm-debug-fix.patch
+cd ../..
+./x build --stage 2 compiler/rustc library/std
+```
+
+Run `git apply` from `src/llvm-project`, because the patch paths start at that
+submodule's root. The patch was developed against Rust's LLVM 22-era vendored
+tree and may need rebasing for newer LLVM revisions. Rebuilding a dirty
+`src/llvm-project` checkout causes Rust's bootstrap to build and use the local
+LLVM rather than an unchanged downloaded CI LLVM.
