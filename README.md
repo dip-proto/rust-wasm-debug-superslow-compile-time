@@ -44,6 +44,7 @@ machine. It is sensitive to thermal throttling. Repeated runs take about 30 to
 
 ## Controls
 
+```text
 +----------------------------------------+--------------+
 | Build                                  | Time         |
 +----------------------------------------+--------------+
@@ -52,6 +53,7 @@ machine. It is sensitive to thermal throttling. Repeated runs take about 30 to
 | wasm32-unknown-unknown, no debug info  | 1.3 s        |
 | host target, debug = 2                 | 1.1 s        |
 +----------------------------------------+--------------+
+```
 
 ```sh
 CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release --target=wasm32-unknown-unknown
@@ -79,6 +81,7 @@ the next to attribute the stall.
 The crate generates a single function, `repro`. Summing time for each pass
 produces the following results.
 
+```text
 +---------------------------------+-----------+-----------+
 | Pass                            | debug = 2 | debug = 1 |
 +---------------------------------+-----------+-----------+
@@ -89,6 +92,7 @@ produces the following results.
 +---------------------------------+-----------+-----------+
 | total                           |  30.31 s  |   2.78 s  |
 +---------------------------------+-----------+-----------+
+```
 
 Instruction selection costs the same in both columns. This result is expected,
 because the input machine code is the same.
@@ -107,12 +111,14 @@ emitted LLVM IR is identical at 3,809 lines for either spelling.
 Only the debug information differs. Each `wrapping_*` call is a separate
 inlined function. Its parameters receive their own records.
 
+```text
 +-------------------------------+------------+---------+
 | Written as                    | #dbg_value | Build   |
 +-------------------------------+------------+---------+
 | `wrapping_add`/`wrapping_mul` |     30 612 |    55 s |
 | `+` and `*`                   |     13 101 |     9 s |
 +-------------------------------+------------+---------+
+```
 
 The machine code is the same. There are 2.3 times as many debug records and
 roughly six times the build time.
