@@ -177,18 +177,8 @@ seconds.
 
 ### Apply the patch to a Rust source checkout
 
-The patch changes LLVM source. It cannot modify an installed rustup toolchain.
-Apply it to the `src/llvm-project` submodule of a compatible `rust-lang/rust`
-checkout. Then rebuild Rust, such as a stage-2 compiler:
+The patch changes LLVM source.
 
-```sh
-git clone https://github.com/rust-lang/rust.git
-cd rust/src/llvm-project
-git apply --check /absolute/path/to/llvm-wasm-debug-fix.patch
-git apply /absolute/path/to/llvm-wasm-debug-fix.patch
-cd ../..
-./x build --stage 2 compiler/rustc library/std
-```
+Apply it to the `src/llvm-project` submodule of a compatible `rust-lang/rust` checkout.
 
-Run `git apply` from `src/llvm-project`. The patch paths start at that
-submodule's root.
+Then rebuild Rust.
