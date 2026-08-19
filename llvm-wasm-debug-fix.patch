@@ -1,0 +1,209 @@
+diff --git a/llvm/include/llvm/CodeGen/SlotIndexes.h b/llvm/include/llvm/CodeGen/SlotIndexes.h
+index 780bd82a4c62..61fb24fdd144 100644
+--- a/llvm/include/llvm/CodeGen/SlotIndexes.h
++++ b/llvm/include/llvm/CodeGen/SlotIndexes.h
+@@ -422,6 +422,9 @@ class raw_ostream;
+         if (I == B)
+           return getMBBStartIdx(MBB);
+         --I;
++        // Debug instructions are never numbered.
++        if (I->isDebugInstr())
++          continue;
+         Mi2IndexMap::const_iterator MapItr = mi2iMap.find(&*I);
+         if (MapItr != mi2iMap.end())
+           return MapItr->second;
+@@ -439,6 +442,9 @@ class raw_ostream;
+         ++I;
+         if (I == E)
+           return getMBBEndIdx(MBB);
++        // Debug instructions are never numbered.
++        if (I->isDebugInstr())
++          continue;
+         Mi2IndexMap::const_iterator MapItr = mi2iMap.find(&*I);
+         if (MapItr != mi2iMap.end())
+           return MapItr->second;
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp
+index da3717499689..93f7bdd51227 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyDebugValueManager.cpp
+@@ -16,6 +16,7 @@
+ #include "WebAssembly.h"
+ #include "WebAssemblyMachineFunctionInfo.h"
+ #include "llvm/CodeGen/MachineInstr.h"
++#include "llvm/CodeGen/MachineRegisterInfo.h"
+ #include "llvm/IR/DebugInfoMetadata.h"
+ #include "llvm/IR/Function.h"
+ 
+@@ -26,21 +27,44 @@ WebAssemblyDebugValueManager::WebAssemblyDebugValueManager(MachineInstr *Def)
+   if (!Def->getMF()->getFunction().getSubprogram())
+     return;
+ 
+-  // This code differs from MachineInstr::collectDebugValues in that it scans
+-  // the whole BB, not just contiguous DBG_VALUEs, until another definition to
+-  // the same register is encountered.
++  // This code differs from MachineInstr::collectDebugValues in that it
++  // collects DBG_VALUEs anywhere between Def and the next definition of the
++  // same register in Def's BB, not just contiguous DBG_VALUEs.
+   if (!Def->getOperand(0).isReg())
+     return;
+   CurrentReg = Def->getOperand(0).getReg();
+ 
+-  for (MachineBasicBlock::iterator MI = std::next(Def->getIterator()),
+-                                   ME = Def->getParent()->end();
+-       MI != ME; ++MI) {
+-    // If another definition appears, stop
+-    if (MI->definesRegister(CurrentReg, /*TRI=*/nullptr))
++  MachineRegisterInfo &MRI = Def->getMF()->getRegInfo();
++  MachineBasicBlock *MBB = Def->getParent();
++  unsigned RemainingUses = 0;
++  for (MachineInstr &MI : MRI.use_instructions(CurrentReg))
++    if (MI.isDebugValue() && MI.getParent() == MBB)
++      ++RemainingUses;
++  if (RemainingUses == 0)
++    return;
++
++  // Walk down from Def collecting its DBG_VALUEs, and simultaneously walk up
++  // counting off uses located above Def, so both walks can stop as soon as
++  // every use is accounted for.
++  MachineBasicBlock::iterator Down = std::next(Def->getIterator()),
++                              DownEnd = MBB->end(), Up = Def->getIterator(),
++                              UpBegin = MBB->begin();
++  while (RemainingUses > 0 && Down != DownEnd) {
++    if (Down->isDebugValue()) {
++      if (Down->hasDebugOperandForReg(CurrentReg)) {
++        DbgValues.push_back(&*Down);
++        --RemainingUses;
++      }
++    } else if (Down->definesRegister(CurrentReg, /*TRI=*/nullptr)) {
++      // If another definition appears, stop
+       break;
+-    if (MI->isDebugValue() && MI->hasDebugOperandForReg(CurrentReg))
+-      DbgValues.push_back(&*MI);
++    }
++    ++Down;
++    if (Up != UpBegin) {
++      --Up;
++      if (Up->isDebugValue() && Up->hasDebugOperandForReg(CurrentReg))
++        --RemainingUses;
++    }
+   }
+ }
+ 
+@@ -64,44 +88,68 @@ WebAssemblyDebugValueManager::getSinkableDebugValues(
+     MachineInstr *Insert) const {
+   if (DbgValues.empty())
+     return {};
+-  // DBG_VALUEs between Def and Insert
++
++  // If Def and Insert are in different BBs, we only handle a simple case in
++  // which Insert's BB is a successor of Def's BB.
++  if (Def->getParent() != Insert->getParent() &&
++      !Def->getParent()->isSuccessor(Insert->getParent()))
++    return {};
++
++  // Only DBG_VALUEs for one of our DbgValues' variables can affect
++  // sinkability.
++  SmallDenseSet<std::pair<const DILocalVariable *, const DILocation *>, 4>
++      OurVars;
++  for (auto *DV : DbgValues)
++    OurVars.insert({DV->getDebugVariable(), DV->getDebugLoc()->getInlinedAt()});
++  auto IsRelevantDbgValue = [&](const MachineInstr &MI) {
++    return MI.isDebugValue() &&
++           OurVars.count(
++               {MI.getDebugVariable(), MI.getDebugLoc()->getInlinedAt()});
++  };
++
++  // DBG_VALUEs between Def and Insert whose variable is one of ours
+   SmallVector<MachineInstr *, 8> DbgValuesInBetween;
+ 
+   if (Def->getParent() == Insert->getParent()) {
+     // When Def and Insert are within the same BB, check if Insert comes after
+     // Def, because we only support sinking.
++    MachineBasicBlock::iterator Down = std::next(Def->getIterator()),
++                                DownEnd = Def->getParent()->end(),
++                                Up = Def->getIterator(),
++                                UpBegin = Def->getParent()->begin();
+     bool DefFirst = false;
+-    for (MachineBasicBlock::iterator MI = std::next(Def->getIterator()),
+-                                     ME = Def->getParent()->end();
+-         MI != ME; ++MI) {
+-      if (&*MI == Insert) {
+-        DefFirst = true;
+-        break;
++    while (Down != DownEnd || Up != UpBegin) {
++      if (Down != DownEnd) {
++        if (&*Down == Insert) {
++          DefFirst = true;
++          break;
++        }
++        if (IsRelevantDbgValue(*Down))
++          DbgValuesInBetween.push_back(&*Down);
++        ++Down;
++      }
++      if (Up != UpBegin) {
++        --Up;
++        if (&*Up == Insert) // Insert is above Def
++          break;
+       }
+-      if (MI->isDebugValue())
+-        DbgValuesInBetween.push_back(&*MI);
+     }
+     if (!DefFirst) // Not a sink
+       return {};
+ 
+   } else { // Def and Insert are in different BBs
+-    // If Def and Insert are in different BBs, we only handle a simple case in
+-    // which Insert's BB is a successor of Def's BB.
+-    if (!Def->getParent()->isSuccessor(Insert->getParent()))
+-      return {};
+-
+     // Gather DBG_VALUEs between 'Def~Def BB's end' and
+     // 'Insert BB's begin~Insert'
+     for (MachineBasicBlock::iterator MI = std::next(Def->getIterator()),
+                                      ME = Def->getParent()->end();
+          MI != ME; ++MI) {
+-      if (MI->isDebugValue())
++      if (IsRelevantDbgValue(*MI))
+         DbgValuesInBetween.push_back(&*MI);
+     }
+     for (MachineBasicBlock::iterator MI = Insert->getParent()->begin(),
+                                      ME = Insert->getIterator();
+          MI != ME; ++MI) {
+-      if (MI->isDebugValue())
++      if (IsRelevantDbgValue(*MI))
+         DbgValuesInBetween.push_back(&*MI);
+     }
+   }
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp
+index 97f2ed0a828b..d877f99f2073 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp
+@@ -468,7 +468,18 @@ static bool oneUseDominatesOtherUses(unsigned Reg, const MachineOperand &OneUse,
+   const LiveInterval &LI = LIS.getInterval(Reg);
+ 
+   const MachineInstr *OneUseInst = OneUse.getParent();
+-  VNInfo *OneUseVNI = LI.getVNInfoBefore(LIS.getInstructionIndex(*OneUseInst));
++  SlotIndex OneUseIdx = LIS.getInstructionIndex(*OneUseInst);
++  VNInfo *OneUseVNI = LI.getVNInfoBefore(OneUseIdx);
++
++  // Like MDT.dominates, but uses SlotIndexes instead of scanning the BB for
++  // same-BB queries.
++  auto OneUseDominates = [&](const MachineInstr *UseI) {
++    if (OneUseInst->getParent() != UseI->getParent())
++      return MDT.dominates(OneUseInst->getParent(), UseI->getParent());
++    if (OneUseInst == UseI)
++      return true;
++    return SlotIndex::isEarlierInstr(OneUseIdx, LIS.getInstructionIndex(*UseI));
++  };
+ 
+   for (const MachineOperand &Use : MRI.use_nodbg_operands(Reg)) {
+     if (&Use == &OneUse)
+@@ -487,7 +498,7 @@ static bool oneUseDominatesOtherUses(unsigned Reg, const MachineOperand &OneUse,
+         return false;
+     } else {
+       // Test that the use is dominated by the one selected use.
+-      while (!MDT.dominates(OneUseInst, UseInst)) {
++      while (!OneUseDominates(UseInst)) {
+         // Actually, dominating is over-conservative. Test that the use would
+         // happen after the one selected use in the stack evaluation order.
+         //
